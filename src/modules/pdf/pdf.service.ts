@@ -1,4 +1,3 @@
-// receipt.service.ts
 import { Injectable } from '@nestjs/common';
 import * as PDFDocument from 'pdfkit';
 
@@ -28,8 +27,11 @@ interface ReceiptData {
 
 @Injectable()
 export class ReceiptService {
+  private readonly CHARGE_ITEM_HEIGHT = 35;
+  private readonly PAGE_MARGIN_BOTTOM = 50;
+  private readonly PAGE_BREAK_THRESHOLD = 100;
+
   async generateFlowReceipt(data?: Partial<ReceiptData>): Promise<Buffer> {
-    // Dados padrão para demonstração
     const receiptData: ReceiptData = {
       receiptNumber: data?.receiptNumber || 'FF-2025-12345',
       date: data?.date || new Date().toLocaleDateString('pt-BR'),
@@ -71,14 +73,15 @@ export class ReceiptService {
     return new Promise((resolve) => {
       const buffers: Buffer[] = [];
 
-      // Design minimalista - usar tamanho menor que A4
       const doc = new PDFDocument({
-        size: [400, 700], // Tamanho um pouco maior para acomodar campos adicionais
+        size: [400, 700],
         margin: 30,
         info: {
           Title: 'Comprovante de Pagamento FreeFlow',
           Author: 'Sua Empresa',
         },
+
+        bufferPages: true,
       });
 
       doc.on('data', (chunk) => buffers.push(chunk));
@@ -88,20 +91,25 @@ export class ReceiptService {
         resolve(pdfData);
       });
 
-      // Layout minimalista com cabeçalhos de seção
       this.addMinimalHeader(doc);
       this.addReceiptDetails(doc, receiptData);
-      this.addChargesTable(doc, receiptData.charges);
+
+      this.addChargesTablePaged(doc, receiptData.charges);
+
       this.addTotalsSection(doc, receiptData);
       this.addPaymentInfo(doc, receiptData);
-      this.addMinimalFooter(doc);
+
+      const totalPages = doc.bufferedPageRange().count;
+      for (let i = 0; i < totalPages; i++) {
+        doc.switchToPage(i);
+        this.addMinimalFooter(doc, i + 1, totalPages);
+      }
 
       doc.end();
     });
   }
 
   private addMinimalHeader(doc: PDFKit.PDFDocument): void {
-    // Título minimalista
     doc
       .fontSize(12)
       .fillColor('#555')
@@ -111,7 +119,6 @@ export class ReceiptService {
   }
 
   private addReceiptDetails(doc: PDFKit.PDFDocument, data: ReceiptData): void {
-    // Adicionando cabeçalho de seção - CORRIGIDO
     doc
       .strokeColor('#eaeaea')
       .lineWidth(0.5)
@@ -119,24 +126,19 @@ export class ReceiptService {
       .lineTo(doc.page.width - 30, doc.y)
       .stroke();
 
-    doc.moveDown(0.3); // Pequeno espaço antes do título
+    doc.moveDown(0.5);
 
     doc
       .fillColor('#555')
       .font('Helvetica-Bold')
       .fontSize(10)
-      .text('INFORMAÇÕES DO RECIBO', {
-        align: 'left', // Alterado para left
-        width: doc.page.width - 60,
-      });
+      .text('INFORMAÇÕES DO RECIBO', 30, doc.y);
 
-    doc.moveDown(0.5); // Espaço menor após o título
+    doc.moveDown(0.8);
 
-    // Colunas alinhadas com larguras fixas para evitar sobreposição
-    const labelX = 30; // Posição X inicial para etiquetas
-    const valueX = 115; // Posição X inicial para valores
+    const labelX = 30;
+    const valueX = 115;
 
-    // RECIBO Nº
     doc
       .font('Helvetica-Bold')
       .fontSize(9)
@@ -145,62 +147,58 @@ export class ReceiptService {
 
     doc.font('Helvetica').text(data.receiptNumber, valueX, doc.y - 9);
 
-    // Avançar para próxima linha
-    doc.moveDown(0.5);
+    doc.moveDown(0.7);
 
-    // DATA
     doc.font('Helvetica-Bold').text('DATA:', labelX, doc.y);
 
     doc.font('Helvetica').text(data.date, valueX, doc.y - 9);
 
-    doc.moveDown(0.5);
+    doc.moveDown(0.7);
 
-    // CLIENTE
     doc.font('Helvetica-Bold').text('CLIENTE:', labelX, doc.y);
 
     doc.font('Helvetica').text(data.customerName, valueX, doc.y - 9);
 
-    doc.moveDown(0.5);
+    doc.moveDown(0.7);
 
-    // DOCUMENTO
     doc.font('Helvetica-Bold').text('DOCUMENTO:', labelX, doc.y);
 
     doc.font('Helvetica').text(data.customerDocument, valueX, doc.y - 9);
 
-    doc.moveDown(1);
+    doc.moveDown(0.5);
   }
 
-  private addChargesTable(doc: PDFKit.PDFDocument, charges: Charge[]): void {
-    doc
-      .strokeColor('#eaeaea')
-      .lineWidth(0.5)
-      .moveTo(30, doc.y)
-      .lineTo(doc.page.width - 30, doc.y)
-      .stroke();
+  private addChargesTablePaged(
+    doc: PDFKit.PDFDocument,
+    charges: Charge[],
+  ): void {
+    doc.moveDown(1);
+    this.addSectionHeader(doc, 'COBRANÇAS');
+    doc.moveDown(0.8);
 
-    doc.moveDown(0.3);
+    let itemsOnCurrentPage = 0;
 
-    // ALTERAÇÃO PRINCIPAL - Posicionando "COBRANÇAS" no início da linha
-    doc
-      .fillColor('#555')
-      .font('Helvetica-Bold')
-      .fontSize(10)
-      .text('COBRANÇAS', 30, doc.y); // Forçando posição X=30 (início da linha)
+    for (let index = 0; index < charges.length; index++) {
+      const charge = charges[index];
 
-    doc.moveDown(0.5);
+      const spaceAvailable = doc.page.height - doc.y - this.PAGE_MARGIN_BOTTOM;
 
-    // Versão minimalista da tabela sem bordas
-    charges.forEach((charge, index) => {
-      // Alternar cores de fundo para facilitar leitura
-      if (index % 2 === 0) {
-        doc
-          .rect(30, doc.y, doc.page.width - 60, 30) // Altura aumentada para evitar sobreposições
-          .fill('#f9f9f9');
+      if (spaceAvailable < this.PAGE_BREAK_THRESHOLD) {
+        doc.addPage();
+
+        if (index < charges.length) {
+          this.addSectionHeader(doc, 'COBRANÇAS (continuação)');
+          doc.moveDown(0.8);
+          itemsOnCurrentPage = 0;
+        }
+      }
+
+      if (itemsOnCurrentPage % 2 === 0) {
+        doc.rect(30, doc.y, doc.page.width - 60, 30).fill('#f9f9f9');
       }
 
       const yPos = doc.y;
 
-      // ID e descrição à esquerda
       doc
         .fillColor('#555')
         .font('Helvetica-Bold')
@@ -211,7 +209,6 @@ export class ReceiptService {
         .font('Helvetica')
         .text(charge.description, 35, yPos + 15, { width: 200 });
 
-      // Vencimento e valor à direita
       doc
         .font('Helvetica')
         .fontSize(8)
@@ -219,22 +216,21 @@ export class ReceiptService {
 
       doc
         .font('Helvetica-Bold')
+        .fontSize(8)
         .text(
           `R$ ${charge.amount.toFixed(2).replace('.', ',')}`,
-          doc.page.width - 60,
+          doc.page.width - 145,
           yPos + 15,
-          { align: 'right' },
         );
 
-      // Avançar o cursor para garantir que o próximo item não sobreponha
-      doc.y = yPos + 35;
-    });
+      doc.y = yPos + this.CHARGE_ITEM_HEIGHT;
+      itemsOnCurrentPage++;
+    }
 
     doc.moveDown(0.5);
   }
 
-  private addTotalsSection(doc: PDFKit.PDFDocument, data: ReceiptData): void {
-    // Adicionando cabeçalho de seção - CORRIGIDO
+  private addSectionHeader(doc: PDFKit.PDFDocument, title: string): void {
     doc
       .strokeColor('#eaeaea')
       .lineWidth(0.5)
@@ -242,21 +238,30 @@ export class ReceiptService {
       .lineTo(doc.page.width - 30, doc.y)
       .stroke();
 
-    doc.moveDown(0.3);
+    doc.moveDown(0.5);
 
-    // ALTERAÇÃO PRINCIPAL - Posicionando "RESUMO DE VALORES" no início da linha
     doc
       .fillColor('#555')
       .font('Helvetica-Bold')
       .fontSize(10)
-      .text('RESUMO DE VALORES', 30, doc.y); // Forçando posição X=30 (início da linha)
+      .text(title, 30, doc.y);
+  }
 
-    doc.moveDown(0.5);
+  private addTotalsSection(doc: PDFKit.PDFDocument, data: ReceiptData): void {
+    const spaceNeeded = 200;
+    const spaceAvailable = doc.page.height - doc.y - this.PAGE_MARGIN_BOTTOM;
 
-    const labelX = 30; // X para rótulos
-    const valueX = 200; // X para valores
+    if (spaceAvailable < spaceNeeded) {
+      doc.addPage();
+    }
 
-    // Subtotal
+    doc.moveDown(1);
+    this.addSectionHeader(doc, 'RESUMO DE VALORES');
+    doc.moveDown(0.8);
+
+    const labelX = 30;
+    const valueX = 200;
+
     doc.font('Helvetica-Bold').fontSize(9).text('SUBTOTAL:', labelX, doc.y);
 
     doc
@@ -268,9 +273,8 @@ export class ReceiptService {
         { align: 'right' },
       );
 
-    doc.moveDown(0.5);
+    doc.moveDown(0.7);
 
-    // Desconto
     doc.font('Helvetica-Bold').text('DESCONTO:', labelX, doc.y);
 
     doc
@@ -282,9 +286,8 @@ export class ReceiptService {
         { align: 'right' },
       );
 
-    doc.moveDown(0.5);
+    doc.moveDown(0.7);
 
-    // Taxa de serviço
     doc.font('Helvetica-Bold').text('TAXA DE SERVIÇO:', labelX, doc.y);
 
     doc
@@ -296,9 +299,8 @@ export class ReceiptService {
         { align: 'right' },
       );
 
-    doc.moveDown(0.5);
+    doc.moveDown(0.7);
 
-    // Imposto
     doc.font('Helvetica-Bold').text('IMPOSTO:', labelX, doc.y);
 
     doc
@@ -307,11 +309,80 @@ export class ReceiptService {
         align: 'right',
       });
 
+    doc.moveDown(0.7);
+
+    doc
+      .strokeColor('#cccccc')
+      .lineWidth(0.5)
+      .moveTo(30, doc.y)
+      .lineTo(doc.page.width - 30, doc.y)
+      .stroke();
+
+    doc.moveDown(0.7);
+
+    doc.font('Helvetica-Bold').fontSize(11).text('TOTAL PAGO:', labelX, doc.y);
+
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(12)
+      .text(
+        `R$ ${data.totalPaid.toFixed(2).replace('.', ',')}`,
+        valueX,
+        doc.y - 11,
+        { align: 'right' },
+      );
+
     doc.moveDown(0.5);
   }
 
   private addPaymentInfo(doc: PDFKit.PDFDocument, data: ReceiptData): void {
-    // Adicionando cabeçalho de seção - CORRIGIDO
+    const spaceNeeded = 150;
+    const spaceAvailable = doc.page.height - doc.y - this.PAGE_MARGIN_BOTTOM;
+
+    if (spaceAvailable < spaceNeeded) {
+      doc.addPage();
+    }
+
+    doc.moveDown(1);
+    this.addSectionHeader(doc, 'DETALHES DO PAGAMENTO');
+    doc.moveDown(0.8);
+
+    const labelX = 30;
+    const valueX = 120;
+
+    doc.font('Helvetica-Bold').fontSize(8).text('MÉTODO:', labelX, doc.y);
+
+    doc.font('Helvetica').text(data.paymentMethod, valueX, doc.y - 8);
+
+    doc.moveDown(0.7);
+
+    doc.font('Helvetica-Bold').text('DATA:', labelX, doc.y);
+
+    doc.font('Helvetica').text(data.paymentDate, valueX, doc.y - 8);
+
+    doc.moveDown(0.7);
+
+    if (data.transactionId) {
+      doc.font('Helvetica-Bold').text('ID TRANSAÇÃO:', labelX, doc.y);
+
+      doc.font('Helvetica').text(data.transactionId, valueX, doc.y - 8);
+
+      doc.moveDown(0.7);
+    }
+
+    doc.moveDown(0.5);
+  }
+
+  private addMinimalFooter(
+    doc: PDFKit.PDFDocument,
+    pageNumber: number,
+    totalPages: number,
+  ): void {
+    const currentY = doc.y;
+
+    const footerY = doc.page.height - 100;
+    doc.y = footerY;
+
     doc
       .strokeColor('#eaeaea')
       .lineWidth(0.5)
@@ -319,78 +390,29 @@ export class ReceiptService {
       .lineTo(doc.page.width - 30, doc.y)
       .stroke();
 
-    doc.moveDown(0.3);
+    doc.moveDown(1);
 
-    // ALTERAÇÃO PRINCIPAL - Posicionando "DETALHES DO PAGAMENTO" no início da linha
-    doc
-      .fillColor('#555')
-      .font('Helvetica-Bold')
-      .fontSize(10)
-      .text('DETALHES DO PAGAMENTO', 30, doc.y); // Forçando posição X=30 (início da linha)
+    const centerX = doc.page.width / 2;
 
-    doc.moveDown(0.5);
+    doc.fontSize(7).font('Helvetica').fillColor('#888');
 
-    // Nomes de campos e valores em colunas organizadas
-    const labelX = 30; // X para etiquetas
-    const valueX = 120; // X para valores
-
-    // MÉTODO
-    doc.font('Helvetica-Bold').fontSize(8).text('MÉTODO:', labelX, doc.y);
-
-    doc.font('Helvetica').text(data.paymentMethod, valueX, doc.y - 8);
+    const text1 = 'Este documento é autêntico e foi gerado eletronicamente.';
+    doc.text(text1, centerX - doc.widthOfString(text1) / 2, doc.y);
 
     doc.moveDown(0.5);
 
-    // DATA
-    doc.font('Helvetica-Bold').text('DATA:', labelX, doc.y);
-
-    doc.font('Helvetica').text(data.paymentDate, valueX, doc.y - 8);
-
     doc.moveDown(0.5);
 
-    // ID TRANSAÇÃO (se existir)
-    if (data.transactionId) {
-      doc.font('Helvetica-Bold').text('ID TRANSAÇÃO:', labelX, doc.y);
+    const dateTime = new Date().toLocaleString('pt-BR');
+    let text3 = `Emitido em ${dateTime}`;
 
-      doc.font('Helvetica').text(data.transactionId, valueX, doc.y - 8);
-
-      doc.moveDown(0.5);
+    if (totalPages > 1) {
+      text3 += ` | Página ${pageNumber} de ${totalPages}`;
     }
 
-    doc.moveDown(0.5);
-  }
+    doc.fontSize(6);
+    doc.text(text3, centerX - doc.widthOfString(text3) / 2, doc.y);
 
-  private addMinimalFooter(doc: PDFKit.PDFDocument): void {
-    // Informações de autenticação
-    doc.moveDown(0.5);
-    doc
-      .fontSize(7)
-      .font('Helvetica')
-      .fillColor('#888')
-      .text('Este documento é autêntico e foi gerado eletronicamente.', {
-        align: 'center',
-      });
-
-    doc.fontSize(7).text(`Código de autenticação: ${this.generateAuthCode()}`, {
-      align: 'center',
-    });
-
-    doc.moveDown(0.5);
-    doc.fontSize(6).text(`Emitido em ${new Date().toLocaleString('pt-BR')}`, {
-      align: 'center',
-    });
-  }
-
-  private generateAuthCode(): string {
-    // Gerar código de autenticação aleatório
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let code = '';
-
-    for (let i = 0; i < 16; i++) {
-      if (i > 0 && i % 4 === 0) code += '-';
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-
-    return code;
+    doc.y = currentY;
   }
 }
