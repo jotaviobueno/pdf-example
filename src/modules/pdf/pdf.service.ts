@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { format } from 'date-fns';
 import * as PDFDocument from 'pdfkit';
 
 interface Charge {
@@ -11,7 +12,7 @@ interface Charge {
 
 interface ReceiptData {
   receiptNumber: string;
-  date: string;
+  date: Date;
   customerName: string;
   customerDocument: string;
   charges: Charge[];
@@ -21,7 +22,7 @@ interface ReceiptData {
   serviceFee: number;
   totalPaid: number;
   paymentMethod: string;
-  paymentDate: string;
+  paymentDate: Date;
   transactionId?: string;
 }
 
@@ -31,43 +32,36 @@ export class ReceiptService {
   private readonly PAGE_MARGIN_BOTTOM = 50;
   private readonly PAGE_BREAK_THRESHOLD = 100;
 
-  async generateFlowReceipt(data?: Partial<ReceiptData>): Promise<Buffer> {
+  async generateFlowReceipt(): Promise<Buffer> {
     const receiptData: ReceiptData = {
-      receiptNumber: data?.receiptNumber || 'FF-2025-12345',
-      date: data?.date || new Date().toLocaleDateString('pt-BR'),
-      customerName: data?.customerName || 'Maria Silva',
-      customerDocument: data?.customerDocument || '123.456.789-00',
-      charges: data?.charges || [
+      receiptNumber: 'FF-2025-12345',
+      date: new Date(),
+      customerName: 'Maria Silva',
+      customerDocument: '123.456.789-00',
+      charges: [
         {
           id: 'CH001',
-          description: 'Assinatura Mensal - Maio/2025',
+          description: 'ERS122-Km108-Sul',
           dueDate: '10/05/2025',
-          amount: 99.9,
+          amount: 13.9,
           status: 'Pago',
         },
         {
           id: 'CH002',
-          description: 'Serviços Adicionais',
+          description: 'ERS122-Km108-Norte',
           dueDate: '10/05/2025',
           amount: 49.9,
           status: 'Pago',
         },
-        {
-          id: 'CH003',
-          description: 'Taxa de Processamento',
-          dueDate: '10/05/2025',
-          amount: 5.0,
-          status: 'Pago',
-        },
       ],
-      subtotal: data?.subtotal || 154.8,
-      discount: data?.discount || 0,
-      tax: data?.tax || 0,
-      serviceFee: data?.serviceFee || 0,
-      totalPaid: data?.totalPaid || 154.8,
-      paymentMethod: data?.paymentMethod || 'Cartão de Crédito',
-      paymentDate: data?.paymentDate || new Date().toLocaleDateString('pt-BR'),
-      transactionId: data?.transactionId || 'TRX-789456123',
+      subtotal: 154.8,
+      discount: 0,
+      tax: 0,
+      serviceFee: 0,
+      totalPaid: 154.8,
+      paymentMethod: 'Cartão de Crédito',
+      paymentDate: new Date(),
+      transactionId: 'TRX-789456123',
     };
 
     return new Promise((resolve) => {
@@ -78,7 +72,8 @@ export class ReceiptService {
         margin: 30,
         info: {
           Title: 'Comprovante de Pagamento FreeFlow',
-          Author: 'Sua Empresa',
+          Author: 'CSG FreeFlow',
+          CreationDate: new Date(),
         },
 
         bufferPages: true,
@@ -93,9 +88,7 @@ export class ReceiptService {
 
       this.addMinimalHeader(doc);
       this.addReceiptDetails(doc, receiptData);
-
       this.addChargesTablePaged(doc, receiptData.charges);
-
       this.addTotalsSection(doc, receiptData);
       this.addPaymentInfo(doc, receiptData);
 
@@ -151,7 +144,9 @@ export class ReceiptService {
 
     doc.font('Helvetica-Bold').text('DATA:', labelX, doc.y);
 
-    doc.font('Helvetica').text(data.date, valueX, doc.y - 9);
+    doc
+      .font('Helvetica')
+      .text(format(data.date, "dd/MM/yyyy 'às' HH:mm:ss"), valueX, doc.y - 9);
 
     doc.moveDown(0.7);
 
@@ -358,7 +353,13 @@ export class ReceiptService {
 
     doc.font('Helvetica-Bold').text('DATA:', labelX, doc.y);
 
-    doc.font('Helvetica').text(data.paymentDate, valueX, doc.y - 8);
+    doc
+      .font('Helvetica')
+      .text(
+        format(data.paymentDate, "dd/MM/yyyy 'às' HH:mm:ss"),
+        valueX,
+        doc.y - 8,
+      );
 
     doc.moveDown(0.7);
 
